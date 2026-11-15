@@ -151,8 +151,24 @@ header button{border:0;background:none;font-size:18px;color:var(--mut)}
 .seg button.on{background:var(--acc);color:#fff}
 @media (max-width:700px){#sq{width:90px}}
 .vm .vol{width:64px;margin-left:auto;accent-color:var(--acc)}
+.mb span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.cb{border:0;background:none;font-size:16px;border-radius:6px;padding:4px 6px}
+.cb:hover{background:var(--hov)}
+#dm{position:fixed;inset:0;z-index:60;background:linear-gradient(#1e1f22,#2b2d31);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:calc(24px + env(safe-area-inset-top,0px)) 24px calc(24px + env(safe-area-inset-bottom,0px))}
+.dmrow{display:flex;gap:32px}
+.av.cav{width:112px;height:112px;font-size:44px;transition:box-shadow .15s}
+.cav.sp{box-shadow:0 0 0 4px var(--grn)}
+.cav.ring{animation:pulse 1.3s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(35,165,90,.7)}100%{box-shadow:0 0 0 28px rgba(35,165,90,0)}}
+.dmn{font-size:24px;font-weight:600}
+.dmt{color:#b5bac1}
+.dmb{display:flex;gap:18px;margin-top:12px}
+.dmb button{width:64px;height:64px;border-radius:50%;border:0;font-size:26px;background:#383a40;color:#fff}
+.dmb .red{background:#da373c}
+.dmb .grn{background:#23a55a}
+.dmb .off{background:#fff;color:#111}
 .scrim{display:none}
-@media (max-width:1000px){#mem,#mbtn{display:none}}
+@media (max-width:1000px){#mem{display:none;position:fixed;top:env(safe-area-inset-top,0px);bottom:env(safe-area-inset-bottom,0px);right:0;z-index:12;box-shadow:-4px 0 16px rgba(0,0,0,.4)}#mem.show{display:block}}
 @media (max-width:700px){
 .side{position:fixed;top:env(safe-area-inset-top,0px);bottom:env(safe-area-inset-bottom,0px);left:0;z-index:10;transform:translateX(-100%);transition:.2s}
 .side.open{transform:none}
@@ -460,9 +476,9 @@ const myId=()=>{const p=V.room&&V.room.peers().find(x=>x.isMe&&x.sameTab);return
 const sig=(id,d)=>V.room&&V.room.emit("sig",{...d,to:id}).catch(()=>{});
 function drawCall(){
   const sv=S.servers.find(x=>x.id===S.sid),mi=$("#umic"),di=$("#udeaf");
-  $("#vp").hidden=!V.cid;$("#cn").textContent=V.cid?V.name+" / "+(sv?sv.name:""):"";
+  $("#vp").hidden=!V.cid||V.direct;$("#cn").textContent=V.cid?V.name+" / "+(sv?sv.name:""):"";
   mi.textContent=V.muted?"🔇":"🎤";mi.classList.toggle("off",V.muted);
-  di.textContent=V.deaf?"🔕":"🎧";di.classList.toggle("off",V.deaf);
+  di.textContent=V.deaf?"🔕":"🎧";di.classList.toggle("off",V.deaf);drawDm();
 }
 function mk(id){
   if(V.pcs[id])return V.pcs[id];
@@ -509,8 +525,8 @@ async function joinVoice(c){
   let st;
   try{st=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})}
   catch(e){toast("Нет доступа к микрофону — разрешите его или откройте страницу в отдельной вкладке");micCheck();return}
-  const vr=await rm.join("v-"+S.sid+"-"+c.id);
-  V.stream=st;V.cid=c.id;V.name=c.name;V.room=vr;V.muted=false;V.deaf=false;V.sp={};V.peers=[];V.q={};watch(st,"me");if(CFG.ptt)setMute(true);
+  const vr=await rm.join(c.room||("v-"+S.sid+"-"+c.id));
+  V.stream=st;V.cid=c.id;V.name=c.name;V.room=vr;V.direct=!!c.direct;V.t0=0;V.muted=false;V.deaf=false;V.sp={};V.peers=[];V.q={};watch(st,"me");if(CFG.ptt)setMute(true);
   V.offs=[
     vr.on("sig",onSig),
     vr.onPeers(ch=>{
@@ -553,7 +569,9 @@ function drawMem(){
   const m=$("#mem"),seen=new Set(),list=[];
   for(const p of S.on){const k=p.by||p.peer;if(!seen.has(k)){seen.add(k);list.push(p)}}
   drawTyping();m.replaceChildren(el("h3",null,"В сети — "+list.length));
-  for(const p of list){const r=el("div","mb"),n=nameOf(p.by,p.isMe);r.append(avatar(p.by,n," on"),el("span",null,n));m.append(r)}
+  for(const p of list){const r=el("div","mb"),n=nameOf(p.by,p.isMe);r.append(avatar(p.by,n," on"),el("span",null,n));
+    if(!p.isMe&&p.by){const b=el("button","cb","📞");b.title="Позвонить";b.onclick=()=>callUser(p);r.append(b)}
+    m.append(r)}
 }
 async function lobby(){
   const rm=window.claude?await claude.use("room"):null;if(!rm)return;
@@ -563,7 +581,7 @@ async function lobby(){
     if(ids.length&&user)user.profiles(ids).then(r=>{Object.assign(S.prof,r);drawMem()}).catch(()=>{});
     drawMem();
   });
-  LB=rm;rm.presence({online:true}).catch(()=>{});
+  LB=rm;rm.on("sig",onRing);rm.presence({online:true}).catch(()=>{});
 }
 function watch(stream,key){
   try{
@@ -576,7 +594,7 @@ function watch(stream,key){
     for(const k in V.an){
       V.an[k].getByteFrequencyData(buf);
       const on=buf.reduce((a,x)=>a+x,0)/buf.length>18;
-      if(!!V.sp[k]!==on){V.sp[k]=on;document.querySelectorAll('.vm[data-k="'+k+'"]').forEach(e=>e.classList.toggle("sp",on))}
+      if(!!V.sp[k]!==on){V.sp[k]=on;document.querySelectorAll('[data-k="'+k+'"]').forEach(e=>e.classList.toggle("sp",on))}
     }
   },150);
 }
@@ -743,9 +761,90 @@ $("#fl").onchange=async e=>{
 $("#sq").oninput=e=>{S.q=e.target.value.trim().toLowerCase();drawMsgs()};
 $("#pn").onclick=()=>{S.pins=!S.pins;$("#pn").classList.toggle("on",S.pins);drawMsgs()};
 $("#uset").onclick=openSettings;
-$("#mbtn").onclick=()=>$("#mem").classList.toggle("hide");
+$("#mbtn").onclick=()=>{const m=$("#mem");m.classList.toggle(matchMedia("(max-width:1000px)").matches?"show":"hide")};
 addEventListener("keydown",e=>{if(CFG.ptt&&V.cid&&e.code==="KeyV"&&!e.repeat&&!/INPUT|TEXTAREA/.test((e.target||{}).tagName||""))setMute(false)});
 addEventListener("keyup",e=>{if(CFG.ptt&&V.cid&&e.code==="KeyV")setMute(true)});
+let tmr=null,ringI=null,ringA=null;
+const fmtT=ms=>{const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0")};
+const lsig=(d)=>{if(LB)LB.emit("sig",d).catch(()=>{})};
+function ringStart(){
+  ringStop();
+  const play=()=>{
+    try{
+      ringA=ringA||new (window.AudioContext||window.webkitAudioContext)();ringA.resume();const t=ringA.currentTime;
+      [0,.25].forEach(o=>{const x=ringA.createOscillator(),g=ringA.createGain();x.frequency.value=o?660:880;g.gain.value=.08;x.connect(g);g.connect(ringA.destination);x.start(t+o);x.stop(t+o+.2)});
+    }catch(e){}
+    if(navigator.vibrate)navigator.vibrate([300,150,300]);
+  };
+  play();ringI=setInterval(play,1800);
+}
+function ringStop(){clearInterval(ringI);ringI=null;if(navigator.vibrate)navigator.vibrate(0)}
+function endDirect(msg){
+  const c=S.call;if(c&&c.to)clearTimeout(c.to);
+  ringStop();S.call=null;
+  if(V.cid&&V.direct)leaveVoice();
+  drawDm();if(msg)toast(msg);
+}
+function onRing(m){
+  const d=m.data||{};
+  if(m.isMe||!d.k||d.toUid!==UID())return;
+  if(d.k==="ring"){
+    if(V.cid||S.call){lsig({k:"busy",toUid:d.fromUid,room:d.room});return}
+    S.call={state:"in",uid:d.fromUid,name:d.fromName||"Участник",room:d.room};
+    document.title="📞 Звонит "+S.call.name;ringStart();drawDm();
+  }else if(S.call&&S.call.room===d.room){
+    if(d.k==="cancel"&&S.call.state==="in")endDirect("Звонок отменён");
+    else if(d.k==="decline")endDirect("Звонок отклонён");
+    else if(d.k==="busy")endDirect("Собеседник занят");
+  }
+}
+async function callUser(p){
+  const uid=p.by;
+  if(!uid||uid===UID()||!LB){toast("Нельзя позвонить этому участнику");return}
+  if(V.cid||S.call){toast("Сначала завершите текущий звонок");return}
+  $("#mem").classList.remove("show");
+  const name=nameOf(uid),room="d-"+Math.random().toString(36).slice(2,10);
+  S.call={state:"out",uid,name,room};drawDm();
+  await joinVoice({id:room,name,room,direct:true});
+  if(!V.cid){S.call=null;drawDm();return}
+  lsig({k:"ring",toUid:uid,room,fromUid:UID(),fromName:(me&&me.name)||"Гость"});
+  S.call.to=setTimeout(()=>{if(S.call&&S.call.room===room&&S.call.state==="out"){lsig({k:"cancel",toUid:uid,room});endDirect("Нет ответа")}},45000);
+}
+async function acceptCall(){
+  const c=S.call;if(!c||c.state!=="in")return;
+  ringStop();document.title=TITLE;c.state="live";drawDm();
+  await joinVoice({id:c.room,name:c.name,room:c.room,direct:true});
+  if(!V.cid){S.call=null;drawDm();lsig({k:"decline",toUid:c.uid,room:c.room})}
+}
+function declineCall(){const c=S.call;if(!c)return;lsig({k:"decline",toUid:c.uid,room:c.room});endDirect()}
+function hangup(){
+  const c=S.call;if(c&&c.state==="out")lsig({k:"cancel",toUid:c.uid,room:c.room});
+  endDirect();
+}
+function drawDm(){
+  let o=$("#dm");const c=S.call;
+  if(!c){if(o)o.remove();clearInterval(tmr);tmr=null;ringStop();document.title=TITLE;return}
+  if(!o){o=el("div");o.id="dm";document.body.append(o)}
+  const oth=V.cid&&V.direct?V.peers.find(p=>!(p.isMe&&p.sameTab)):null;
+  if(oth&&!V.t0&&c.state!=="in"){V.t0=Date.now();c.state="live"}
+  if(V.t0&&!oth&&c.state==="live"){setTimeout(()=>endDirect("Собеседник завершил звонок"),0);return}
+  const av=(id,n,k)=>{const a=avatar(id,n);a.className="av cav"+(V.sp[k]?" sp":"");if(k)a.dataset.k=k;return a};
+  const row=el("div","dmrow"),nm=el("div","dmn",c.name),st=el("div","dmt");st.id="dmt";
+  const bar=el("div","dmb"),btn=(t,cls,tip,fn)=>{const b=el("button",cls,t);b.title=tip;b.onclick=fn;bar.append(b)};
+  if(c.state==="in"){
+    const a=av(c.uid,c.name);a.classList.add("ring");row.append(a);st.textContent="Входящий звонок…";
+    btn("✖","red","Отклонить",declineCall);btn("📞","grn","Принять",acceptCall);
+  }else{
+    row.append(av(UID(),(me&&me.name)||"Вы","me"),av(c.uid,c.name,oth&&oth.peer));
+    st.textContent=oth&&V.t0?fmtT(Date.now()-V.t0):(c.state==="out"?"Звоним…":"Соединение…");
+    btn(V.muted?"🔇":"🎤",V.muted?"off":"","Микрофон",()=>$("#umic").click());
+    btn(V.deaf?"🔕":"🎧",V.deaf?"off":"","Наушники",()=>$("#udeaf").click());
+    btn("📞","red","Завершить",hangup);
+    if(!tmr)tmr=setInterval(()=>{const t=$("#dmt");if(t&&V.t0)t.textContent=fmtT(Date.now()-V.t0)},1000);
+  }
+  o.replaceChildren(row,nm,st,bar);
+}
+
 applyUi();
 
 async function send(){
