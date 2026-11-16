@@ -189,6 +189,8 @@ header button{border:0;background:none;font-size:18px;color:var(--mut)}
 #dmm button{border:0;background:none;color:#fff;padding:8px 14px;font-weight:600}
 #dmm .mx{background:#da373c}
 .ti{border:0;border-radius:6px;background:var(--bg3);color:var(--tx);padding:8px;outline:none}
+.dbg{color:#b5bac1;font-size:12px;text-align:center;max-width:420px}
+.rbtn{margin-top:6px;border:0;border-radius:6px;background:#383a40;color:#fff;padding:6px 12px}
 .scrim{display:none}
 @media (max-width:1000px){#mem{display:none;position:fixed;top:env(safe-area-inset-top,0px);bottom:env(safe-area-inset-bottom,0px);right:0;z-index:12;box-shadow:-4px 0 16px rgba(0,0,0,.4)}#mem.show{display:block}}
 @media (max-width:700px){
@@ -492,11 +494,11 @@ function pickServer(id){
 }
 
 /* ---- голосовые звонки (WebRTC, сигналы через room) ---- */
-const V={cid:null,name:"",room:null,pcs:{},aud:{},q:{},stream:null,offs:[],peers:[],muted:false,deaf:false,sp:{},an:{},vol:{},vs:{},vid:{},conn:{},vsrc:null,vk:null,ctx:null,iv:null};
+const V={cid:null,name:"",room:null,pcs:{},aud:{},q:{},stream:null,offs:[],peers:[],muted:false,deaf:false,sp:{},an:{},vol:{},vs:{},vid:{},conn:{},dbg:{},rt:0,vsrc:null,vk:null,ctx:null,iv:null};
 const iceCfg=()=>{
   const s=[{urls:["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302","stun:global.stun.twilio.com:3478"]}],t=CFG.turn;
   if(t&&t.url)s.push({urls:t.url.split(/[\s,]+/).filter(Boolean),username:t.user||"",credential:t.pass||""});
-  else s.push({urls:["turn:openrelay.metered.ca:80","turn:openrelay.metered.ca:443","turn:openrelay.metered.ca:443?transport=tcp"],username:"openrelayproject",credential:"openrelayproject"});
+  else s.push({urls:["turn:openrelay.metered.ca:80","turn:openrelay.metered.ca:443","turn:openrelay.metered.ca:443?transport=tcp","turns:openrelay.metered.ca:443?transport=tcp","turn:staticauth.openrelay.metered.ca:80","turn:staticauth.openrelay.metered.ca:443","turns:staticauth.openrelay.metered.ca:443?transport=tcp"],username:"openrelayproject",credential:"openrelayproject"});
   return{iceServers:s,iceCandidatePoolSize:4};
 };
 const myId=()=>{const p=V.room&&V.room.peers().find(x=>x.isMe&&x.sameTab);return p&&p.peer};
@@ -512,9 +514,10 @@ function mk(id){
   const pc=new RTCPeerConnection(iceCfg());V.pcs[id]=pc;
   V.stream.getTracks().forEach(t=>pc.addTrack(t,V.stream));
   if(V.direct){const tv=pc.addTransceiver("video",{direction:"sendrecv"});V.vs[id]=tv.sender;if(V.vsrc)tv.sender.replaceTrack(V.vsrc.getVideoTracks()[0]).catch(()=>{})}
-  pc.onicecandidate=e=>{if(e.candidate)sig(id,{k:"ice",c:e.candidate.toJSON()})};
+  pc.onicecandidate=e=>{if(e.candidate){const g=V.dbg[id]=V.dbg[id]||{},t=e.candidate.type||"x";g[t]=(g[t]||0)+1;sig(id,{k:"ice",c:e.candidate.toJSON()})}};
   pc.ontrack=e=>{if(e.track.kind==="video"){V.vid[id]=new MediaStream([e.track]);drawDm();return}let a=V.aud[id];if(!a){a=V.aud[id]=new Audio();a.autoplay=true;a.playsInline=true;a.style.display="none";document.body.append(a)}a.srcObject=e.streams[0];a.muted=V.deaf;a.volume=(V.vol[id]==null?100:V.vol[id])/100;watch(e.streams[0],id);a.play().catch(()=>{})};
   pc.oniceconnectionstatechange=()=>{V.conn[id]=pc.iceConnectionState;drawDm()};
+  setTimeout(()=>{const c=S.call;if(V.pcs[id]===pc&&!["connected","completed"].includes(pc.iceConnectionState)&&c&&c.out&&!V.rt){V.rt=1;reconnect()}},10000);
   setTimeout(()=>{if(V.pcs[id]===pc&&!["connected","completed"].includes(pc.iceConnectionState))toast("Нет звука? Сеть блокирует соединение. Откройте ⚙️ и добавьте свой TURN-сервер.")},15000);
   pc.onconnectionstatechange=()=>{if(pc.connectionState==="failed"){toast("Не удалось соединиться (сеть мешает). Откройте ⚙️ и добавьте TURN-сервер.");drop(id)}};
   return pc;
@@ -522,11 +525,16 @@ function mk(id){
 function drop(id){
   const pc=V.pcs[id];if(pc){pc.onconnectionstatechange=null;pc.close()}
   const a=V.aud[id];if(a){a.srcObject=null;a.remove()}
-  delete V.pcs[id];delete V.aud[id];delete V.q[id];delete V.an[id];delete V.sp[id];delete V.vs[id];delete V.vid[id];delete V.conn[id];
+  delete V.pcs[id];delete V.aud[id];delete V.q[id];delete V.an[id];delete V.sp[id];delete V.vs[id];delete V.vid[id];delete V.conn[id];delete V.dbg[id];
 }
 async function call(id){
   const pc=mk(id),o=await pc.createOffer();await pc.setLocalDescription(o);
   sig(id,{k:"offer",s:{type:o.type,sdp:o.sdp}});
+}
+function reconnect(){
+  const c=S.call,oth=V.peers.find(p=>!(p.isMe&&p.sameTab));
+  Object.keys(V.pcs).forEach(drop);
+  if(c&&c.out&&oth)call(oth.peer);else if(V.room)V.room.emit("sig",{k:"hello"}).catch(()=>{});
 }
 async function flush(id){const pc=V.pcs[id];for(const c of V.q[id]||[])await pc.addIceCandidate(c).catch(()=>{});V.q[id]=[]}
 async function onSig(m){
@@ -535,6 +543,7 @@ async function onSig(m){
   try{
     if(d.k==="hello"){const q=V.pcs[id];if(q&&["connected","completed"].includes(q.iceConnectionState))return;drop(id);await call(id);return}
     if(!d.to||d.to!==myId())return;
+    {const g=V.dbg[id]=V.dbg[id]||{};g["rx"+d.k]=(g["rx"+d.k]||0)+1}
     if(d.k==="offer"){
       const pc=mk(id);await pc.setRemoteDescription(d.s);await flush(id);
       const a=await pc.createAnswer();await pc.setLocalDescription(a);
@@ -556,7 +565,7 @@ async function joinVoice(c){
   try{st=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})}
   catch(e){toast("Нет доступа к микрофону — разрешите его или откройте страницу в отдельной вкладке");micCheck();return}
   const vr=await rm.join(c.room||("v-"+S.sid+"-"+c.id));
-  V.stream=st;V.cid=c.id;V.name=c.name;V.room=vr;V.direct=!!c.direct;V.t0=0;V.muted=false;V.deaf=false;V.sp={};V.peers=[];V.q={};watch(st,"me");if(CFG.ptt)setMute(true);
+  V.stream=st;V.cid=c.id;V.name=c.name;V.room=vr;V.direct=!!c.direct;V.t0=0;V.rt=0;V.muted=false;V.deaf=false;V.sp={};V.peers=[];V.q={};watch(st,"me");if(CFG.ptt)setMute(true);
   V.offs=[
     vr.on("sig",onSig),
     vr.onPeers(ch=>{
@@ -841,7 +850,7 @@ async function callUser(p){
   if(V.cid||S.call){toast("Сначала завершите текущий звонок");return}
   $("#mem").classList.remove("show");
   const name=nameOf(uid),room="d-"+Math.random().toString(36).slice(2,10);
-  S.call={state:"out",uid,name,room};drawDm();
+  S.call={state:"out",uid,name,room,out:1};drawDm();
   await joinVoice({id:room,name,room,direct:true});
   if(!V.cid){S.call=null;drawDm();return}
   lsig({k:"ring",toUid:uid,room,fromUid:UID(),fromName:(me&&me.name)||"Гость"});
@@ -930,7 +939,10 @@ function drawDm(){
   const items=[["📹",V.vk==="cam"?"off":"","Камера",()=>setVideo(V.vk==="cam"?null:"cam")]];
   if(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia)items.push(["🖥",V.vk==="screen"?"off":"","Показ экрана",()=>setVideo(V.vk==="screen"?null:"screen")]);
   items.push([V.muted?"🔇":"🎤",V.muted?"off":"","Микрофон",()=>$("#umic").click()],[V.deaf?"🔕":"🎧",V.deaf?"off":"","Наушники",()=>$("#udeaf").click()],["📞","red","Завершить",hangup]);
-  o.replaceChildren(top,row,bar(items,false));
+  const dg=(oth&&V.dbg[oth.peer])||{},dl=el("div","dbg");
+  dl.textContent=oth?"Сеть: "+(V.conn[oth.peer]||"ожидание")+" · кандидаты host "+(dg.host||0)+", srflx "+(dg.srflx||0)+", relay "+(dg.relay||0)+" · получено offer "+(dg.rxoffer||0)+", answer "+(dg.rxanswer||0)+", ice "+(dg.rxice||0):"Ждём собеседника…";
+  if(oth){const rb=el("button","rbtn","Переподключить");rb.onclick=reconnect;dl.append(el("br"),rb)}
+  o.replaceChildren(top,...(V.t0?[]:[dl]),row,bar(items,false));
 }
 
 applyUi();
